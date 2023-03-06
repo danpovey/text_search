@@ -98,10 +98,16 @@ def find_close_matches(suffix_array: np.ndarray, query_len: int) -> np.ndarray:
             for j in range(last_pos + 1, i):
                 query_pos = suffix_array[j]
                 if query_pos < query_len:
-                    pre_ref_pos = (
+                    # set to `seq_len - 2` if no precede references
+                    precede_ref_pos = (
                         seq_len - 2 if last_pos == -1 else suffix_array[last_pos]
                     )
-                    output[2 * query_pos] = pre_ref_pos
-                    output[2 * query_pos + 1] = text_pos
+                    # set to `seq_len - 2` if meet EOS
+                    follow_ref_pos = (
+                        seq_len - 2 if text_pos == seq_len - 1 else text_pos
+                    )
+
+                    output[2 * query_pos] = precede_ref_pos
+                    output[2 * query_pos + 1] = follow_ref_pos
             last_pos = i
     return output
