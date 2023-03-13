@@ -19,6 +19,7 @@ endfunction()
 if(FTS_ENABLE_TESTS)
   set(test_srcs
     test_levenshtein_distance.py
+    test_sourced_text.py
     test_suffix_array.py
     test_text_source.py
     test_transcript.py

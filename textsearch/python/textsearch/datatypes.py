@@ -217,12 +217,12 @@ class SourcedText:
     """
     Represents a text with some meta-info that records from where in a collection of
     texts it came.
-
-    # TODO(pzelasko): if I understand correctly this class hides whether the text came from TextSource or Transcript
-    # TODO(pzelasko): test it
     """
 
-    # A 1-d array, probably a sequence of bytes of UTF-8 encoded text.
+    # A 1-d array. Its data type can be either np.uint8 or np.int32.
+    # If it is np.uint8, it represents utf-8 encoded strings.
+    # If it is np.int32, it represents strings with Unicode code point.
+    #
     # Note: this text array is 'owned' here so it can be modified by the user.
     binary_text: np.ndarray
 
@@ -234,7 +234,7 @@ class SourcedText:
     doc: Union[int, np.ndarray]
 
     # For reference, the list of available text sources that this text might come from.
-    sources: List[TextSource]
+    sources: TextSources
 
     # Optional: an array derived from `doc` which is like the row
     # splits in k2 (or in tensorflow ragged arrays), with `doc` being
@@ -242,44 +242,81 @@ class SourcedText:
     doc_splits: Optional[np.ndarray] = None
 
 
-def texts_to_sourced_texts(sources: List[TextSource]) -> List[SourcedText]:
-    # TODO(pzelasko): test it
-    return [
-        SourcedText(
-            binary_text=s.binary_text,
-            # TODO(pzelasko): not sure if 'pos' here has the same meaning as in
-            #  TextSource (byte offset for each UTF-8 symbol start)
-            #  or as suggested by docstring in SourcedText
-            #  (text position in the original source for each element of the text).
-            #  For now I am assuming the latter but if that's right we should find a new name
-            #  to avoid ambiguity.
-            pos=np.arange(len(s.binary_text), dtype=np.uint32),
-            doc=doc_idx,
-            sources=[s],
-            doc_splits=None,
+def texts_to_sourced_texts(sources: TextSources) -> List[SourcedText]:
+    """Construct a list of SourcedText from TextSources.
+    We have len(ans) == len(sources).
+    """
+    ans = []
+
+    for s in sources:
+        # pos[i] contains the index of the i-th entry in s.binary_text
+        #
+        # If s.binary_text.dtype is np.int32, pos[i] is the position of the i-th
+        # Unicode code point in s.binary_text
+        #
+        # If s.binary_text.dtype is np.uint8, pos[i] is the position of the
+        # i-th byte of s.binary_text
+        pos = np.arange(s.binary_text.size, dtype=np.uint32)
+
+        ans.append(
+            SourcedText(
+                binary_text=s.binary_text,
+                pos=pos,
+                doc=0,  # indexes into the following `sources` attribte
+                sources=[s],
+                doc_splits=None,
+            )
         )
-        for doc_idx, s in enumerate(sources)
-    ]
+
+    return ans
 
 
 def append_texts(texts: List[SourcedText]) -> SourcedText:
-    # TODO(pzelasko): ensure this is right; my interpretation here is that
-    #   the resulting SourcedText is similar to k2 Fsa / ragged tensors
-    #   in that it's actually a batch of texts with varying sizes,
-    #   and doc + doc_splits let us recover the individual items.
-    # TODO(pzelasko): test it
+    if len(texts) == 1:
+        # return a shallow copy
+        return texts[0]
+
+    # Check that all texts have the same dtype
+    for t in texts[1:]:
+        assert t.binary_text.dtype in (np.uint8, np.int32), t.dtype
+        assert texts[0].binary_text.dtype == t.binary_text.dtype, (
+            texts[0].binary_text.dtype,
+            t.binary_text.dtype,
+        )
+
+    binary_text = np.concatenate([t.binary_text for t in texts])
+    pos = np.concatenate([t.pos for t in texts])
+
+    doc_list = []
+    for t in texts:
+        if isinstance(t.doc, np.ndarray):
+            assert t.doc.dtype == np.uint32, t.doc.dtype
+            doc_list.append(t.doc)
+        else:
+            assert isinstance(t.doc, int), type(t.doc)
+            doc_list.append(np.zeros(t.binary_text.size, dtype=np.uint32))
+
+    num_docs = 0
+    for i, d in enumerate(texts):
+        if i == 0:
+            num_docs = len(d.sources)
+            continue
+        doc_list[i] += num_docs
+        num_docs += len(d.sources)
+
+    doc = np.concatenate(doc_list)
+    assert doc.dtype == np.uint32, doc.dtype
+
+    sources = [s for t in texts for s in t.sources]
+
+    # TODO(fangjun: Add row_ids_to_row_splits() to compute doc_splits from doc
+
     return SourcedText(
-        binary_text=np.concatenate([t.binary_text for t in texts], axis=0),
-        pos=np.concatenate([t.pos for t in texts], axis=0),
-        doc=np.array(
-            [
-                item
-                for t in texts
-                for item in (t.doc if isinstance(t.doc, np.ndarray) else [t.doc])
-            ]
-        ),
-        sources=[s for t in texts for s in t.sources],
-        doc_splits=np.cumsum([0] + [t.binary_text.shape[0] for t in texts[:-1]]),
+        binary_text=binary_text,
+        pos=pos,
+        doc=doc,
+        sources=sources,
+        doc_splits=None,
     )
 
 
